@@ -6,21 +6,44 @@ from icecream import ic
 from flume.base_classes.analysis import Analysis
 from flume.base_classes.state import State
 import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
 
 
 class XCGDAnalysis:
 
-    def __init__(self, lsf_tree, mesh_length, E=1.0, nu=0.3, rho=1.0):
+    def __init__(
+        self,
+        lsf_level: int,
+        mesh_length: float,
+        boundary_refinement: int,
+        interior_refinement: int = 1,
+        E=1.0,
+        nu=0.3,
+        rho=1.0,
+    ):
+
+        # Store the parameters for the tree refinement
+        self.lsf_level = lsf_level
+        self.boundary_refinement = boundary_refinement
+        self.interior_refinement = interior_refinement
+
+        # Construct the source tree for the LSF function
+        tree = xcgd.Quadtree()
+
+        tree.refine([self.lsf_level])
+        tree.balance()
 
         # Construct the quadtree mesh that defines the LSF
-        self.lsf_tree = lsf_tree
+        self.lsf_tree = tree
         self.mesh_length = mesh_length
         self.lsf_mesh = xcgd.QuadtreeMesh(self.lsf_tree, mesh_length)
 
         # Create a quadtree for the mesh
         self.tree = self.lsf_tree.duplicate()
-        self.tree.refine()
+        refinement = self.interior_refinement * np.ones(self.tree.size(), dtype=int)
+        self.tree.refine(refinement)
         self.tree.balance()
+
         self.mesh = xcgd.QuadtreeMesh(self.tree, mesh_length)
 
         # Set the cut mesh
@@ -49,12 +72,49 @@ class XCGDAnalysis:
 
         return
 
-    def _update_after_design_change(self):
-        # Update the underlying quadtree mesh to reflect the balance changes
-        self.mesh.update()
+    def _coarsen_quadtree(self):
+        # Coarsen the quadtree back to the specified LSF level
+        refinement = -self.boundary_refinement * np.ones(self.tree.size(), dtype=int)
 
-        # Update the cut mesh and it's derivatives
+        self.tree.refine(
+            refinement, min_level=self.lsf_level + self.interior_refinement
+        )
+        self.tree.balance()
+
+        return
+
+    def _apply_refinement(self):
+
+        # Get the interface and interior elements for the existing cut mesh
+        interface_elems = self.cut_mesh.get_interface_elements()
+        exterior_elems = self.cut_mesh.get_exterior_elements()
+
+        # Specify the refinement level for the tree
+        refinement = np.zeros(self.tree.size(), dtype=np.int32)
+        refinement[exterior_elems] = -self.interior_refinement
+        refinement[interface_elems] = (
+            self.boundary_refinement - self.interior_refinement
+        )
+        self.tree.refine(refinement, min_level=self.lsf_level)
+        self.tree.balance()
+
+        return
+
+    def _update_after_design_change(self):
+        # Coarsen the quadtree
+        self._coarsen_quadtree()
+
+        # Update the mesh and cut-mesh after coarsening
+        self.mesh.update()
         self.cut_mesh.update()
+
+        # Refine the quadtree
+        self._apply_refinement()
+
+        # Update the underlying mesh and the cut mesh again after refinement has been applied
+        self.mesh.update()
+        self.cut_mesh.update()
+
         self.cut_mesh.update_derivatives()
 
         # Get the interior mesh
@@ -431,6 +491,7 @@ class Starfish(Analysis):
             "circle_radius": 1.0,
             "mesh_length": 3.0,
             "starting_harmonic": 3.0,
+            "plotting_npts": 100,
         }
 
         # Perform the base class object initialization
@@ -530,20 +591,98 @@ class Starfish(Analysis):
 
         return
 
-    def plot_lsf(self):
-        # Extract the value of the LSF function
-        lsf = self.outputs["lsf"].value
+    def plot_lsf(self, linewidth=0.5):
+        # Extract the current design variable coefficients
+        coeffs = self.variables["coeffs"].value
 
         # Create a figure
-        fig, ax = plt.subplots(1, 1)
+        fig, ax = plt.subplots(1, 1, figsize=(6, 6))
 
-        # Plot the contour
-        # X, Y = np.meshgrid(self.x, self.y)
-        # plt.tricontour(self.x, self.y, lsf, levels=4)
-        ax.tricontour(self.x, self.y, lsf, levels=[0])
+        mesh_length = self.parameters["mesh_length"]
+        npts = self.parameters["plotting_npts"]
+        x = np.linspace(0.0, mesh_length, npts)
+        y = np.linspace(0.0, mesh_length, npts)
 
-        ax.axis("equal")
-        # ax.axis("off")
+        # Get the various elements for the mesh
+        cut = self.xcgd.cut_mesh
+        interior = cut.get_interior_elements()
+        exterior = cut.get_exterior_elements()
+        interface = cut.get_interface_elements()
+
+        # Create a fine regular grid
+        X, Y = np.meshgrid(x, y)
+
+        # Evaluate the LSF on the fine grid
+        x0 = y0 = mesh_length / 2
+        R2 = (X - x0) ** 2 + (Y - y0) ** 2
+        lsf = R2 - self.parameters["circle_radius"] ** 2
+
+        theta_grid = np.arctan2(Y - y0, X - x0)
+        starting_harmonic = self.parameters["starting_harmonic"]
+        for i, coeff in enumerate(coeffs):
+            harmonic = starting_harmonic + i
+            lsf += coeff * np.cos(harmonic * theta_grid)
+
+        # Plot the zero-level contour on the fine grid
+        ax.contour(X, Y, lsf, levels=[0], colors="#640391", linewidths=1.5, zorder=1)
+
+        # Shape: (num_elements, 4, 2)
+        mesh_X = np.array(cut.get_cell_locations())
+        points = mesh_X.reshape(-1, 4, 2)
+
+        # Convert tensor-product ordering into boundary ordering:
+        # bottom-left -> bottom-right -> top-right -> top-left
+        boundary_order = [0, 1, 3, 2, 0]
+        polygons = points[:, boundary_order, :]
+
+        # Convert each polygon into its four line segments.
+        segments = np.concatenate(
+            [
+                polygons[:, 0:2, :],
+                polygons[:, 1:3, :],
+                polygons[:, 2:4, :],
+                polygons[:, 3:5, :],
+            ],
+            axis=0,
+        )
+
+        # Plot the elements
+        elem_maps = [interior, exterior, interface]
+        colors = ["lightblue", "gray", "red"]
+
+        for elem_map, color in zip(elem_maps, colors):
+            collection = LineCollection(
+                polygons[elem_map],
+                facecolors=color,
+                edgecolors="none",
+                zorder=0,
+                alpha=0.6,
+            )
+            ax.add_collection(collection)
+
+        mesh_lines = LineCollection(
+            segments,
+            colors="black",
+            linewidths=linewidth,
+            zorder=2,
+        )
+        ax.add_collection(mesh_lines)
+
+        # Set the axis limits tightly around the mesh
+        xmin = points[:, :, 0].min()
+        xmax = points[:, :, 0].max()
+        ymin = points[:, :, 1].min()
+        ymax = points[:, :, 1].max()
+
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+
+        # Preserve physical geometry.
+        ax.set_aspect("equal", adjustable="box")
+
+        # Remove axes, ticks, and surrounding padding.
+        ax.set_axis_off()
+        fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
 
         return fig
 

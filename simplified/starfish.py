@@ -215,43 +215,45 @@ def generate_cut_mesh(level=4, length=3.0, refine=True):
     return cut_mesh
 
 
-cut_mesh = generate_cut_mesh(level=4, refine=False)
-plot_mesh(
-    "starfish_levelset.png",
-    cut_mesh,
-    show_elements=False,
-    show_stencil=False,
-    zoom=False,
-)
+if __name__ == "__main__":
 
-cut_mesh = generate_cut_mesh(level=4)
-plot_mesh(
-    "starfish_levelset_refine.png",
-    cut_mesh,
-    show_elements=False,
-    show_stencil=False,
-    zoom=False,
-)
-plot_mesh(
-    "starfish_elements.png",
-    cut_mesh,
-    show_elements=True,
-    show_stencil=False,
-    zoom=False,
-)
-plot_mesh(
-    "starfish_elements_and_stencil.png",
-    cut_mesh,
-    show_elements=True,
-    show_stencil=True,
-    zoom=False,
-)
+    cut_mesh = generate_cut_mesh(level=4, refine=False)
+    plot_mesh(
+        "starfish_levelset.png",
+        cut_mesh,
+        show_elements=False,
+        show_stencil=False,
+        zoom=False,
+    )
 
-cut_mesh = generate_cut_mesh(level=5)
-plot_mesh(
-    "starfish_quadrature_zoom.png",
-    cut_mesh,
-    show_elements=True,
-    show_stencil=True,
-    zoom=True,
-)
+    cut_mesh = generate_cut_mesh(level=4)
+    plot_mesh(
+        "starfish_levelset_refine.png",
+        cut_mesh,
+        show_elements=False,
+        show_stencil=False,
+        zoom=False,
+    )
+    plot_mesh(
+        "starfish_elements.png",
+        cut_mesh,
+        show_elements=True,
+        show_stencil=False,
+        zoom=False,
+    )
+    plot_mesh(
+        "starfish_elements_and_stencil.png",
+        cut_mesh,
+        show_elements=True,
+        show_stencil=True,
+        zoom=False,
+    )
+
+    cut_mesh = generate_cut_mesh(level=5)
+    plot_mesh(
+        "starfish_quadrature_zoom.png",
+        cut_mesh,
+        show_elements=True,
+        show_stencil=True,
+        zoom=True,
+    )
